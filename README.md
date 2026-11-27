@@ -4,7 +4,7 @@
 
 App per telefono (web app installabile) con le attività dei pazienti dei reparti di Neurologia. Si aggiorna in tempo reale per tutti i medici collegati e invia notifiche push.
 
-- Reparti: **Stroke (8)**, **PUCA (8)**, **Ospedaliera (8)**, **Amaducci Uomini (10)**, **Amaducci Donne (10)**. I letti si possono aggiungere, rinominare ed eliminare dall'app.
+- **Reparti e letti** non sono scritti nel codice: li crea l'amministratore dall'app (**⚙︎ → Amministrazione → Reparti**), indicando nome e numero di letti. Si possono rinominare, riordinare ed eliminare; i letti si aggiungono, rinominano ed eliminano dalla schermata del reparto. La stessa app serve quindi per qualsiasi ospedale.
 - Per ogni letto: **paziente**, **appunti**, **attività** e **sotto-attività** da spuntare. Le attività si possono segnare come **urgenti**.
 - Un'attività spuntata sparisce dalla lista. Resta nello storico (pulsante **"Fatte"**, ultimi 3 giorni) con chi l'ha fatta e quando. Subito dopo la spunta compare **"Annulla"** per correggere un errore.
 - Spuntando un'attività vengono chiuse anche le sue sotto-attività.
@@ -18,13 +18,13 @@ Servizi usati, tutti con piano gratuito: **Supabase** (database, login, tempo re
 ---
 
 ## Aggiornare un database già creato
-Se hai già eseguito lo schema in passato, riesegui semplicemente tutto [`supabase/schema.sql`](supabase/schema.sql) nell'editor SQL. Lo script aggiunge solo ciò che manca (per esempio i campi della guardia) e non cancella nessun dato. Poi ripubblica la funzione notifiche (`npx supabase functions deploy notifica --no-verify-jwt`) e l'app.
+Se hai già eseguito lo schema in passato, riesegui semplicemente tutto [`supabase/schema.sql`](supabase/schema.sql) nell'editor SQL. Lo script aggiunge solo ciò che manca (per esempio la gestione dei reparti dall'app) e non cancella nessun dato: i reparti e i letti che avete già restano com'erano. Poi ripubblica la funzione notifiche (`npx supabase functions deploy notifica --no-verify-jwt`) e l'app.
 
 ## 1. Crea il progetto Supabase
 1. Registrati su https://supabase.com, poi **New project**.
 2. **Region: Central EU (Frankfurt)**, così i dati restano in UE. Scegli una password robusta per il database e conservala.
 3. Apri **SQL Editor → New query**, incolla tutto il contenuto di [`supabase/schema.sql`](supabase/schema.sql) e premi **Run**.
-   Vengono create le tabelle, le regole di sicurezza, il tempo reale e i 5 reparti con i 44 letti.
+   Vengono create le tabelle, le regole di sicurezza e il tempo reale. **Nessun reparto è prestabilito**: reparti e letti li creerai dall'app al passo 3.
 
 ## 2. Blocca le registrazioni libere
 - **Authentication → Sign In / Providers → Email**: lascia attivo Email.
@@ -38,6 +38,9 @@ in *SQL Editor* esegui, con la tua email:
 update public.profili set ruolo = 'admin' where email = 'la-tua-email@esempio.it';
 ```
 Da quel momento nell'app compare **⚙︎ Impostazioni → 👥 Amministrazione**.
+
+Al primo accesso l'app ti dirà che non ci sono reparti: premi **Crea il primo reparto** (oppure **⚙︎ → Amministrazione → Reparti → + Nuovo reparto**), scrivi il nome e il numero di letti. Ripeti per ogni reparto. Tutto si può cambiare in seguito, senza toccare il codice né il database.
+Se preferisci caricare molti reparti in una volta dall'editor SQL, c'è un esempio in [`supabase/esempi/reparti-esempio.sql`](supabase/esempi/reparti-esempio.sql).
 
 ## 4. Pubblica le due funzioni server (Edge Functions) — anche dal browser
 Su Supabase: **Edge Functions → Deploy a new function → Via Editor** (o "Open Editor").
@@ -127,6 +130,18 @@ npm install
 npm run dev
 ```
 Apri http://localhost:5173.
+
+## Adattare l'app al proprio ospedale
+Il codice non contiene nulla di specifico di un ospedale. Ecco dove si cambia cosa:
+
+| Cosa | Dove |
+|---|---|
+| Reparti (nome, ordine delle schede, eliminazione) | App: **⚙︎ → Amministrazione → Reparti** (solo amministratori) |
+| Letti di un reparto (numero, nomi) | App: pulsante **+ Aggiungi letto** in fondo al reparto; tocca il numero di un letto libero per rinominarlo o eliminarlo |
+| Pacchetti di attività (protocolli di ingresso, ictus, …) | App: **⚙︎ → Pacchetti di attività** (quelli iniziali sono solo un esempio da adattare) |
+| Elenco delle indagini riconosciute come esami | [`src/indagini.js`](src/indagini.js) |
+| Nome dell'app e icone | `index.html`, `public/manifest.webmanifest`, `public/sw.js`, cartella `public/` |
+| Database, login, notifiche | Il **tuo** progetto Supabase: chiavi nei *Secrets* di GitHub (passo 6) o in `.env` sul computer |
 
 ## Come si usa
 | Azione | Come |

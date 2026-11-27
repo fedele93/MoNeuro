@@ -158,7 +158,7 @@ function RichiestaAccesso({ indietro }) {
         </label>
         <label>Ruolo / reparto <span className="grigio">(facoltativo)</span>
           <input value={v.messaggio} onChange={(e) => setV({ ...v, messaggio: e.target.value })} maxLength={500}
-            placeholder="es. Specializzando 2° anno, Stroke" />
+            placeholder="es. Specializzando 2° anno" />
         </label>
         {msg && <p className="avviso">{msg}</p>}
         <button className="btn primario" disabled={occupato}>{occupato ? 'Invio…' : 'Invia richiesta'}</button>
@@ -245,6 +245,7 @@ function NuovaPassword({ onFatto }) {
 function Principale({ session }) {
   const uid = session.user.id
   const [reparti, setReparti] = useState([])
+  const [repartiCaricati, setRepartiCaricati] = useState(false)
   const [repId, setRepId] = useState(
     () => new URLSearchParams(location.search).get('reparto') || store.get('reparto'),
   )
@@ -316,14 +317,23 @@ function Principale({ session }) {
     }
   }, [admin])
 
+  // reparti: letti dal database (nomi e numero di letti non sono scritti nel codice)
+  const caricaReparti = useCallback(async () => {
+    const { data, error } = await supabase.from('reparti').select('*').order('ordine')
+    if (error) return errore(error)
+    setReparti(data)
+    setRepId((cur) => (cur === GUARDIA || data.some((r) => r.id === cur) ? cur : data[0]?.id))
+    setRepartiCaricati(true)
+  }, [errore])
+  useEffect(() => { caricaReparti(); caricaProfili() }, [caricaReparti, caricaProfili])
+
+  // un amministratore crea o modifica un reparto: tutti i telefoni si aggiornano
   useEffect(() => {
-    supabase.from('reparti').select('*').order('ordine').then(({ data, error }) => {
-      if (error) return errore(error)
-      setReparti(data)
-      setRepId((cur) => (cur === GUARDIA || data.some((r) => r.id === cur) ? cur : data[0]?.id))
-    })
-    caricaProfili()
-  }, [caricaProfili, errore])
+    const ch = supabase.channel('reparti')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reparti' }, () => caricaReparti())
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [caricaReparti])
 
   const caricaPacchetti = useCallback(async () => {
     const { data } = await supabase.from('pacchetti').select('*').order('ordine')
@@ -631,6 +641,26 @@ function Principale({ session }) {
     )
   }
 
+  if (repartiCaricati && reparti.length === 0 && modale?.tipo !== 'admin') {
+    return (
+      <div className="centro">
+        <div className="box">
+          <h1>Nessun reparto</h1>
+          {admin ? (
+            <>
+              <p>Per cominciare crea i reparti del tuo ospedale, con i loro letti. Potrai sempre aggiungerne, rinominarli o eliminarli in seguito.</p>
+              <button className="btn primario" onClick={() => setModale({ tipo: 'admin', iniziale: 'reparti' })}>Crea il primo reparto</button>
+            </>
+          ) : (
+            <p>I reparti non sono ancora stati configurati. Chiedi a un amministratore dell'app di crearli da ⚙︎ Impostazioni → Amministrazione → Reparti.</p>
+          )}
+          <button className="btn" onClick={() => supabase.auth.signOut()}>Esci</button>
+        </div>
+        {toast && <div className={`toast ${toast.tipo || ''}`} role="status"><span>{toast.testo}</span></div>}
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <header className="testata">
@@ -711,6 +741,7 @@ function Principale({ session }) {
           chiudi={() => setModale(null)}
           az={az}
           reparti={reparti}
+          caricaReparti={caricaReparti}
           repId={repId}
           lettiRep={lettiRep}
           pazPerLetto={pazPerLetto}

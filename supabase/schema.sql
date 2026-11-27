@@ -294,27 +294,52 @@ begin
 end $$;
 
 -- =====================================================================
---  DATI INIZIALI: reparti e letti
+--  REPARTI E LETTI: si creano e si modificano dall'app
+--  (⚙︎ Impostazioni → Amministrazione → Reparti). Lo schema non impone
+--  né nomi né numero di letti: ogni ospedale configura i propri.
+--  Un esempio di caricamento via SQL è in supabase/esempi/reparti-esempio.sql
 -- =====================================================================
-insert into public.reparti (nome, ordine) values
-  ('Stroke', 1),
-  ('PUCA', 2),
-  ('Ospedaliera', 3),
-  ('Amaducci Uomini', 4),
-  ('Amaducci Donne', 5)
-on conflict (nome) do nothing;
 
-insert into public.letti (reparto_id, nome, ordine)
-select r.id, n::text, n
-from public.reparti r
-cross join lateral generate_series(1, case r.nome
-    when 'Stroke' then 8
-    when 'PUCA' then 8
-    when 'Ospedaliera' then 8
-    when 'Amaducci Uomini' then 10
-    when 'Amaducci Donne' then 10
-  end) as n
-where not exists (select 1 from public.letti l where l.reparto_id = r.id);
+-- solo gli amministratori creano, rinominano, riordinano ed eliminano i reparti
+drop policy if exists "admin reparti" on public.reparti;
+create policy "admin reparti" on public.reparti for all to authenticated
+  using ((select public.is_admin())) with check ((select public.is_admin()));
+
+-- non si elimina un reparto con pazienti ricoverati (verrebbero cancellati a cascata)
+create or replace function public.proteggi_reparto()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if exists (select 1 from public.pazienti where reparto_id = old.id and not dimesso) then
+    raise exception 'Il reparto "%" ha pazienti ricoverati: trasferiscili o dimettili prima di eliminarlo', old.nome;
+  end if;
+  return old;
+end $$;
+drop trigger if exists reparti_proteggi on public.reparti;
+create trigger reparti_proteggi before delete on public.reparti
+  for each row execute function public.proteggi_reparto();
+
+-- crea un reparto con i suoi letti numerati (1..N) in una sola operazione
+create or replace function public.crea_reparto(p_nome text, p_letti int default 0)
+returns uuid language plpgsql security invoker set search_path = public as $$
+declare v_id uuid; v_ordine int;
+begin
+  if length(trim(p_nome)) = 0 then raise exception 'Nome del reparto mancante'; end if;
+  if p_letti < 0 or p_letti > 200 then raise exception 'Numero di letti non valido'; end if;
+  select coalesce(max(ordine), 0) + 1 into v_ordine from public.reparti;
+  insert into public.reparti (nome, ordine) values (trim(p_nome), v_ordine) returning id into v_id;
+  insert into public.letti (reparto_id, nome, ordine)
+  select v_id, n::text, n from generate_series(1, p_letti) as n;
+  return v_id;
+end $$;
+grant execute on function public.crea_reparto(text, int) to authenticated;
+
+-- i reparti si aggiornano in tempo reale su tutti i telefoni
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    begin alter publication supabase_realtime add table public.reparti; exception when duplicate_object then null; end;
+  end if;
+end $$;
 
 -- =====================================================================
 --  TRASFERIMENTO paziente in un altro letto (anche di altro reparto)
@@ -420,6 +445,7 @@ grant usage on schema public to authenticated;
 grant select, insert, update, delete on all tables in schema public to authenticated;
 grant usage, select on all sequences in schema public to authenticated;
 grant execute on function public.trasferisci_paziente(uuid, uuid) to authenticated;
+grant execute on function public.crea_reparto(text, int) to authenticated;
 alter default privileges in schema public grant select, insert, update, delete on tables to authenticated;
 -- nessun accesso per chi non ha fatto login, tranne inviare una richiesta di accesso
 revoke all on all tables in schema public from anon;

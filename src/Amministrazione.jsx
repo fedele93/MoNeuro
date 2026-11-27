@@ -63,7 +63,7 @@ function Condividi({ testo, mostraToast }) {
 
 const scaduto = (u) => u.scadenza && u.scadenza < oggiLocale()
 
-export default function Amministrazione({ chiudi, mostraToast, session, iniziale, aggiornaConteggio }) {
+export default function Amministrazione({ chiudi, mostraToast, session, iniziale, aggiornaConteggio, reparti = [], caricaReparti }) {
   const io = session.user.id
   const [tab, setTab] = useState(iniziale || 'richieste')
   const [richieste, setRichieste] = useState(null)
@@ -112,7 +112,7 @@ export default function Amministrazione({ chiudi, mostraToast, session, iniziale
   return (
     <Foglio titolo="Amministrazione" chiudi={chiudi}>
       <div className="schede">
-        {[['richieste', `Richieste${attesa ? ` (${attesa})` : ''}`], ['utenti', 'Utenti'], ['notifiche', 'Notifiche']].map(([k, t]) => (
+        {[['richieste', `Richieste${attesa ? ` (${attesa})` : ''}`], ['utenti', 'Utenti'], ['reparti', 'Reparti'], ['notifiche', 'Notifiche']].map(([k, t]) => (
           <button key={k} className={`scheda ${tab === k ? 'attiva' : ''}`} onClick={() => setTab(k)}>{t}</button>
         ))}
       </div>
@@ -164,8 +164,157 @@ export default function Amministrazione({ chiudi, mostraToast, session, iniziale
         </div>
       )}
 
+      {tab === 'reparti' && <GestioneReparti reparti={reparti} caricaReparti={caricaReparti} mostraToast={mostraToast} />}
+
       {tab === 'notifiche' && <ConfiguraNotifiche mostraToast={mostraToast} />}
     </Foglio>
+  )
+}
+
+// ---------------------------------------------------------------- REPARTI E LETTI
+// Nomi e numero di letti non sono scritti nel codice: ogni ospedale li configura qui.
+function GestioneReparti({ reparti, caricaReparti, mostraToast }) {
+  const [conteggi, setConteggi] = useState({})      // reparto_id -> { letti, ricoverati }
+  const [nuovo, setNuovo] = useState(null)          // { nome, letti }
+  const [modifica, setModifica] = useState(null)    // reparto in modifica { id, nome }
+  const [occupato, setOccupato] = useState(false)
+
+  const contaLetti = useCallback(async () => {
+    const [l, p] = await Promise.all([
+      supabase.from('letti').select('reparto_id'),
+      supabase.from('pazienti').select('reparto_id').eq('dimesso', false),
+    ])
+    if (l.error || p.error) return
+    const c = {}
+    for (const x of l.data) (c[x.reparto_id] ??= { letti: 0, ricoverati: 0 }).letti++
+    for (const x of p.data) (c[x.reparto_id] ??= { letti: 0, ricoverati: 0 }).ricoverati++
+    setConteggi(c)
+  }, [])
+  useEffect(() => { contaLetti() }, [contaLetti, reparti])
+
+  const errore = (e) => mostraToast(
+    /duplicate|unique/i.test(e.message) ? 'Esiste già un reparto con questo nome' : e.message, null, 'errore')
+
+  async function crea(e) {
+    e.preventDefault()
+    const nome = nuovo.nome.trim()
+    const n = parseInt(nuovo.letti, 10)
+    if (!nome) return
+    setOccupato(true)
+    const { error } = await supabase.rpc('crea_reparto', { p_nome: nome, p_letti: isNaN(n) ? 0 : n })
+    setOccupato(false)
+    if (error) return errore(error)
+    await caricaReparti?.()
+    setNuovo(null)
+    mostraToast(`Reparto "${nome}" creato${n > 0 ? ` con ${n} letti` : ''}`)
+  }
+
+  async function rinomina(e) {
+    e.preventDefault()
+    const nome = modifica.nome.trim()
+    if (!nome) return
+    const { error } = await supabase.from('reparti').update({ nome }).eq('id', modifica.id)
+    if (error) return errore(error)
+    await caricaReparti?.()
+    setModifica(null)
+    mostraToast('Reparto rinominato')
+  }
+
+  async function elimina(r) {
+    const c = conteggi[r.id] ?? { letti: 0, ricoverati: 0 }
+    if (c.ricoverati > 0) return mostraToast('Prima trasferisci o dimetti i pazienti ricoverati in questo reparto', null, 'errore')
+    if (!confirm(`Eliminare il reparto "${r.nome}" con i suoi ${c.letti} letti? Verrà cancellato anche lo storico dei pazienti dimessi.`)) return
+    const { error } = await supabase.from('reparti').delete().eq('id', r.id)
+    if (error) return errore(error)
+    await caricaReparti?.()
+    setModifica(null)
+    mostraToast('Reparto eliminato')
+  }
+
+  // sposta un reparto su o giù, poi rinumera "ordine" (1, 2, 3…) per tutta la lista
+  async function sposta(i, di) {
+    const lista = reparti.slice()
+    const j = i + di
+    if (j < 0 || j >= lista.length) return
+    ;[lista[i], lista[j]] = [lista[j], lista[i]]
+    const daAggiornare = lista.map((r, k) => ({ id: r.id, ordine: k + 1 })).filter((x, k) => lista[k].ordine !== x.ordine)
+    const esiti = await Promise.all(daAggiornare.map((x) => supabase.from('reparti').update({ ordine: x.ordine }).eq('id', x.id)))
+    const err = esiti.find((e) => e.error)?.error
+    if (err) return errore(err)
+    caricaReparti?.()
+  }
+
+  if (nuovo) {
+    return (
+      <form className="form" onSubmit={crea}>
+        <h3>Nuovo reparto</h3>
+        <label>Nome del reparto
+          <input value={nuovo.nome} onChange={(e) => setNuovo({ ...nuovo, nome: e.target.value })}
+            placeholder="es. Neurologia, Stroke Unit" autoFocus required />
+        </label>
+        <label>Numero di letti <span className="grigio">(numerati da 1; si potranno aggiungere, rinominare o togliere dopo)</span>
+          <input type="number" min={0} max={200} inputMode="numeric" value={nuovo.letti}
+            onChange={(e) => setNuovo({ ...nuovo, letti: e.target.value })} />
+        </label>
+        <div className="bottoni">
+          <button className="btn primario" disabled={occupato || !nuovo.nome.trim()}>{occupato ? 'Creazione…' : 'Crea reparto'}</button>
+          <button type="button" className="btn" onClick={() => setNuovo(null)}>Annulla</button>
+        </div>
+      </form>
+    )
+  }
+
+  if (modifica) {
+    const c = conteggi[modifica.id] ?? { letti: 0, ricoverati: 0 }
+    return (
+      <div className="form">
+        <form className="form" onSubmit={rinomina}>
+          <h3>Modifica reparto</h3>
+          <label>Nome del reparto
+            <input value={modifica.nome} onChange={(e) => setModifica({ ...modifica, nome: e.target.value })} autoFocus required />
+          </label>
+          <div className="bottoni">
+            <button className="btn primario" disabled={!modifica.nome.trim()}>Rinomina</button>
+            <button type="button" className="btn" onClick={() => setModifica(null)}>Annulla</button>
+          </div>
+        </form>
+        <p className="grigio piccolo">{c.letti} {c.letti === 1 ? 'letto' : 'letti'}, {c.ricoverati} {c.ricoverati === 1 ? 'paziente ricoverato' : 'pazienti ricoverati'}.
+          I letti si aggiungono, rinominano ed eliminano dalla schermata del reparto (pulsante “+ Aggiungi letto” in fondo, oppure toccando il numero di un letto libero).</p>
+        <div className="sezione">
+          <button className="btn pericolo" disabled={c.ricoverati > 0} onClick={() => elimina(reparti.find((r) => r.id === modifica.id))}>
+            Elimina reparto
+          </button>
+          {c.ricoverati > 0 && <p className="grigio piccolo">Si può eliminare solo un reparto senza pazienti ricoverati.</p>}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="elenco-admin">
+      <button className="btn primario largo" onClick={() => setNuovo({ nome: '', letti: '' })}>+ Nuovo reparto</button>
+      {reparti.length === 0 && (
+        <p className="grigio">Nessun reparto. Crea i reparti del tuo ospedale indicando nome e numero di letti:
+          l'app non ha nulla di prestabilito.</p>
+      )}
+      {reparti.map((r, i) => {
+        const c = conteggi[r.id] ?? { letti: 0, ricoverati: 0 }
+        return (
+          <div key={r.id} className="riga-admin">
+            <div className="azioni-verticali ordine-frecce">
+              <button className="icona" aria-label="Sposta su" disabled={i === 0} onClick={() => sposta(i, -1)}>▲</button>
+              <button className="icona" aria-label="Sposta giù" disabled={i === reparti.length - 1} onClick={() => sposta(i, 1)}>▼</button>
+            </div>
+            <button className="testo-reparto" onClick={() => setModifica({ id: r.id, nome: r.nome })}>
+              <b>{r.nome}</b><br />
+              <span className="grigio piccolo">{c.letti} {c.letti === 1 ? 'letto' : 'letti'} · {c.ricoverati} {c.ricoverati === 1 ? 'ricoverato' : 'ricoverati'}</span>
+            </button>
+            <span className="freccia">✎</span>
+          </div>
+        )
+      })}
+      <p className="grigio piccolo">L'ordine qui è l'ordine delle schede in alto nell'app. Le modifiche arrivano subito a tutti i colleghi.</p>
+    </div>
   )
 }
 

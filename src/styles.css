@@ -386,6 +386,13 @@ textarea.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; fon
 .riga-admin .freccia { font-size: 22px; color: var(--muted); }
 .azioni-verticali { display: flex; flex-direction: column; gap: 6px; }
 .azioni-verticali .btn { min-height: 38px; padding: 7px 12px; }
+/* elenco reparti: frecce per l'ordine e nome cliccabile */
+.ordine-frecce { gap: 2px; }
+.ordine-frecce .icona { min-height: 28px; min-width: 32px; font-size: 10px; padding: 0; }
+.ordine-frecce .icona:disabled { opacity: .25; }
+.riga-admin .testo-reparto {
+  flex: 1; text-align: left; background: none; border: 0; padding: 4px 0; color: inherit; font: inherit; cursor: pointer;
+}
 .tag.admin { background: var(--primary); color: #fff; border-color: var(--primary); }
 .tag.spento { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
 .messaggio {
